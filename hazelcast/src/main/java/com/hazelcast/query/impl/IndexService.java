@@ -16,79 +16,98 @@
 
 package com.hazelcast.query.impl;
 
-import com.hazelcast.nio.serialization.Data;
-import com.hazelcast.query.IndexAwarePredicate;
-import com.hazelcast.query.Predicate;
-import com.hazelcast.query.QueryException;
-
+import java.lang.reflect.Constructor;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.hazelcast.nio.serialization.Data;
+import com.hazelcast.query.IndexAwarePredicate;
+import com.hazelcast.query.Predicate;
+import com.hazelcast.query.QueryException;
+
 /**
  * This class contains methods which manipulate and access index.
  */
 public class IndexService {
-    private final ConcurrentMap<String, Index> mapIndexes = new ConcurrentHashMap<String, Index>(3);
-    private final AtomicReference<Index[]> indexes = new AtomicReference<Index[]>();
-    private volatile boolean hasIndex;
+	private final ConcurrentMap<String, Index> mapIndexes = new ConcurrentHashMap<String, Index>(3);
+	private final AtomicReference<Index[]> indexes = new AtomicReference<Index[]>();
+	private volatile boolean hasIndex;
 
-    public synchronized Index destroyIndex(String attribute) {
-        return mapIndexes.remove(attribute);
-    }
+	public synchronized Index destroyIndex(String attribute) {
+		return mapIndexes.remove(attribute);
+	}
 
-    public synchronized Index addOrGetIndex(String attribute, boolean ordered) {
-        Index index = mapIndexes.get(attribute);
-        if (index != null) {
-            return index;
-        }
-        index = new IndexImpl(attribute, ordered);
-        mapIndexes.put(attribute, index);
-        Object[] indexObjects = mapIndexes.values().toArray();
-        Index[] newIndexes = new Index[indexObjects.length];
-        for (int i = 0; i < indexObjects.length; i++) {
-            newIndexes[i] = (Index) indexObjects[i];
-        }
-        indexes.set(newIndexes);
-        hasIndex = true;
-        return index;
-    }
+	public synchronized Index addOrGetIndex(String attribute, boolean ordered) {
+		Index index = mapIndexes.get(attribute);
+		if (index != null) {
+			return index;
+		}
+		// Check if in the form attribute@fully.qualified.className[properties]
+		final int indexOfAt = attribute.indexOf("@");
+		if (indexOfAt != -1) {
+			final String line = attribute;
+			attribute = line.substring(0, indexOfAt);
+			try {
+				final int indexOfOpen = line.indexOf('[');
+				final int indexOfClose = line.lastIndexOf(']');
+				final String className = line.substring(indexOfAt + 1, indexOfOpen);
+				final String properties = line.substring(indexOfOpen + 1, indexOfClose);
+				final Class<Index> clazz = (Class<Index>) Class.forName(className);
+				final Constructor<Index> constructor = clazz.getConstructor(String.class, boolean.class, String.class);
+				index = constructor.newInstance(attribute, ordered, properties);
+			} catch (Throwable t) {
+				throw new RuntimeException(t);
+			}
+		} else {
+			index = new IndexImpl(attribute, ordered);
+		}
+		mapIndexes.put(attribute, index);
+		Object[] indexObjects = mapIndexes.values().toArray();
+		Index[] newIndexes = new Index[indexObjects.length];
+		for (int i = 0; i < indexObjects.length; i++) {
+			newIndexes[i] = (Index) indexObjects[i];
+		}
+		indexes.set(newIndexes);
+		hasIndex = true;
+		return index;
+	}
 
-    public Index[] getIndexes() {
-        return indexes.get();
-    }
+	public Index[] getIndexes() {
+		return indexes.get();
+	}
 
-    public void removeEntryIndex(Data indexKey) throws QueryException {
-        for (Index index : indexes.get()) {
-            index.removeEntryIndex(indexKey);
-        }
-    }
+	public void removeEntryIndex(Data indexKey) throws QueryException {
+		for (Index index : indexes.get()) {
+			index.removeEntryIndex(indexKey);
+		}
+	}
 
-    public boolean hasIndex() {
-        return hasIndex;
-    }
+	public boolean hasIndex() {
+		return hasIndex;
+	}
 
-    public void saveEntryIndex(QueryableEntry queryableEntry) throws QueryException {
-        for (Index index : indexes.get()) {
-            index.saveEntryIndex(queryableEntry);
-        }
-    }
+	public void saveEntryIndex(QueryableEntry queryableEntry) throws QueryException {
+		for (Index index : indexes.get()) {
+			index.saveEntryIndex(queryableEntry);
+		}
+	}
 
-    Index getIndex(String attribute) {
-        return mapIndexes.get(attribute);
-    }
+	Index getIndex(String attribute) {
+		return mapIndexes.get(attribute);
+	}
 
-    public Set<QueryableEntry> query(Predicate predicate) {
-        if (hasIndex) {
-            QueryContext queryContext = new QueryContext(this);
-            if (predicate instanceof IndexAwarePredicate) {
-                IndexAwarePredicate iap = (IndexAwarePredicate) predicate;
-                if (iap.isIndexed(queryContext)) {
-                    return iap.filter(queryContext);
-                }
-            }
-        }
-        return null;
-    }
+	public Set<QueryableEntry> query(Predicate predicate) {
+		if (hasIndex) {
+			QueryContext queryContext = new QueryContext(this);
+			if (predicate instanceof IndexAwarePredicate) {
+				IndexAwarePredicate iap = (IndexAwarePredicate) predicate;
+				if (iap.isIndexed(queryContext)) {
+					return iap.filter(queryContext);
+				}
+			}
+		}
+		return null;
+	}
 }
